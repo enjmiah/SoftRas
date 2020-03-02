@@ -30,8 +30,12 @@ def look(vertices, eye, direction=[0, 1, 0], up=None):
         eye = eye[None, :]
     if direction.ndimension() == 1:
         direction = direction[None, :]
+    if up is None:
+        up = torch.tensor([[0.0, 1.0, 0.0]]).expand(direction.shape[0], -1)
     if up.ndimension() == 1:
         up = up[None, :]
+    if torch.is_tensor(up):
+        up = up.to(device)
 
     # create new axes
     z_axis = F.normalize(direction, eps=1e-5)
