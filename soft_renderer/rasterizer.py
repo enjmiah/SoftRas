@@ -17,8 +17,8 @@ class SoftRasterizer(nn.Module):
 
         if dist_func not in ['hard', 'euclidean', 'barycentric']:
             raise ValueError('Distance function only support hard, euclidean and barycentric')
-        if aggr_func_rgb not in ['hard', 'softmax']:
-            raise ValueError('Aggregate function(rgb) only support hard and softmax')
+        if aggr_func_rgb not in ['hard', 'softmax', 'depth']:
+            raise ValueError('Aggregate function(rgb) only support hard, softmax and depth')
         if aggr_func_alpha not in ['hard', 'prod', 'sum']:
             raise ValueError('Aggregate function(a) only support hard, prod and sum')
         if texture_type not in ['surface', 'vertex']:

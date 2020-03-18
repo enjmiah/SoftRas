@@ -20,7 +20,7 @@ class SoftRasterizeFunction(Function):
         # textures: [nb, nf, 9]
 
         func_dist_map = {'hard': 0, 'barycentric': 1, 'euclidean': 2}
-        func_rgb_map = {'hard': 0, 'softmax': 1}
+        func_rgb_map = {'hard': 0, 'softmax': 1, 'depth': 2}
         func_alpha_map = {'hard': 0, 'sum': 1, 'prod': 2}
         func_map_sample = {'surface': 0, 'vertex': 1}
 

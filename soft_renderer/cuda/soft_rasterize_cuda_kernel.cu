@@ -335,9 +335,10 @@ __global__ void forward_soft_rasterize_cuda_kernel(
     for (int k = 0; k < 3; k++) {
         if (func_id_rgb == 0) { // hard assign, set to background
             soft_color[k] = soft_colors[(bn * 4 + k) * (is * is) + pn];
-        } else
-        if (func_id_rgb == 1) {
+        } else if (func_id_rgb == 1) {
             soft_color[k] = soft_colors[(bn * 4 + k) * (is * is) + pn] * softmax_sum; // initialize background color
+        } else if (func_id_rgb == 2) {
+            soft_color[k] = softmax_sum;
         }
     }
     scalar_t depth_min = 10000000;
@@ -410,7 +411,7 @@ __global__ void forward_soft_rasterize_cuda_kernel(
                 }
             }
         } else
-        if (func_id_rgb == 1) { // D * Softmax (Z)
+        if (func_id_rgb == 1 || func_id_rgb == 2) { // D * Softmax (Z)
             if (check_face_frontside(face) || double_side) {
                 const scalar_t zp_norm =  (far - zp) / (far - near);
                 scalar_t exp_delta_zp = 1.;
@@ -421,7 +422,11 @@ __global__ void forward_soft_rasterize_cuda_kernel(
                 const scalar_t exp_z = exp((zp_norm - softmax_max) / gamma_val);
                 softmax_sum = exp_delta_zp * softmax_sum + exp_z * soft_fragment;
                 for (int k = 0; k < 3; k++) {
-                    const scalar_t color_k = forward_sample_texture(texture, w_clip, texture_res, k, texture_sample_type);
+                    const scalar_t color_k =
+                        (func_id_rgb == 2
+                         ? zp
+                         : forward_sample_texture(texture, w_clip, texture_res,
+                                                  k, texture_sample_type));
                     soft_color[k] = exp_delta_zp * soft_color[k] + exp_z * soft_fragment * color_k;// * soft_fragment;
                 }
             }
@@ -449,7 +454,7 @@ __global__ void forward_soft_rasterize_cuda_kernel(
         aggrs_info[(bn * 2 + 0) * (is * is) + pn] = depth_min;
         aggrs_info[(bn * 2 + 1) * (is * is) + pn] = face_index_min;
     } else
-    if (func_id_rgb == 1) {
+    if (func_id_rgb == 1 || func_id_rgb == 2) {
         for (int k = 0; k < 3; k++) {
             soft_colors[(bn * 4 + k) * (is * is) + pn] = soft_color[k] / softmax_sum;
         }
@@ -584,7 +589,8 @@ __global__ void backward_soft_rasterize_cuda_kernel(
                 }
             }
         } else
-        if (func_id_rgb == 1 && (check_face_frontside(face) || double_side)) { // Softmax (Z * D)
+        if ((func_id_rgb == 1 || func_id_rgb == 2)
+            && (check_face_frontside(face) || double_side)) { // Softmax (Z * D)
             scalar_t C_grad_xyz_rgb = 0.;
 
             const scalar_t zp_norm = (far - zp) / (far - near);
@@ -598,7 +604,11 @@ __global__ void backward_soft_rasterize_cuda_kernel(
                     atomicAdd(&grad_texture[3 * j + k], zp_softmax * grad_t);
                 }
 
-                const scalar_t color_k = forward_sample_texture(texture, w, texture_res, k, texture_sample_type);
+                const scalar_t color_k =
+                    (func_id_rgb == 2
+                     ? zp
+                     : forward_sample_texture(texture, w, texture_res, k,
+                                              texture_sample_type));
                 C_grad_xyz_rgb += grad_soft_color_k * (color_k - soft_colors[(bn * 4 + k) * (is * is) + pn]);
             }
             C_grad_xyz_rgb *= zp_softmax;
