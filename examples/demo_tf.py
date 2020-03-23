@@ -17,7 +17,7 @@ import soft_renderer as sr
 current_dir = os.path.dirname(os.path.realpath(__file__))
 data_dir = os.path.join(current_dir, '../data')
 
-OPTIMIZE_SILHOUETTE = True
+OPTIMIZE_SILHOUETTE = False
 
 
 class Model(nn.Module):
@@ -103,10 +103,11 @@ def main():
     angle = 30 if OPTIMIZE_SILHOUETTE else 50
 
     model = Model(os.path.join(data_dir, 'obj/sphere/colored_sphere.obj'), os.path.join(data_dir, 'obj/bg/bg_subdiv.obj')).cuda()
-    renderer = sr.SoftRenderer(image_size=64, sigma_val=1e-4, aggr_func_rgb='hard', 
+    renderer = sr.SoftRenderer(image_size=64, sigma_val=1e-4, aggr_func_rgb='softmax', 
                                camera_mode='look', viewing_angle=angle,
                                light_intensity_ambient=1., light_intensity_directionals=0.,
-                               background_color=[1.,1.,1.])
+                               background_color=[1.,1.,1.],
+                               light_width=3)
     renderer.transform.transformer._eye = [ eye for eye, _ in cameras ]
     renderer.transform.transformer.camera_direction = [ direction for _, direction in cameras ]
 
@@ -117,7 +118,7 @@ def main():
     ])
     optimizer = torch.optim.Adam(model.parameters(), 0.01, betas=(0.5, 0.99))
 
-    loop = tqdm.tqdm(list(range(0, 2000)))
+    loop = tqdm.tqdm(list(range(0, 1000)))
     writer = imageio.get_writer(os.path.join(args.output_dir, 'deform.gif'), mode='I')
     images_gt = images.cuda()
     image1 = images_gt[:,0].detach().cpu().numpy()[0]#.transpose((1, 2, 0))

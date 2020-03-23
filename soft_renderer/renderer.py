@@ -57,7 +57,8 @@ class SoftRenderer(nn.Module):
                  light_mode='surface',
                  light_intensity_ambient=0.5, light_color_ambient=[1,1,1],
                  light_intensity_directionals=0.5, light_color_directionals=[1,1,1],
-                 light_directions=[0,1,0]):
+                 light_directions=[0,1,0],
+                 light_width=2, softmin_scale=10):
         super(SoftRenderer, self).__init__()
 
         # light
@@ -77,7 +78,7 @@ class SoftRenderer(nn.Module):
                                             anti_aliasing, fill_back, eps,
                                             sigma_val, dist_func, dist_eps,
                                             gamma_val, aggr_func_rgb, aggr_func_alpha,
-                                            texture_type)
+                                            texture_type, light_width, softmin_scale)
 
     def set_sigma(self, sigma):
         self.rasterizer.sigma_val = sigma

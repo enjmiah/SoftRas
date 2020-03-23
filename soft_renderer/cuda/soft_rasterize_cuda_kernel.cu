@@ -759,7 +759,7 @@ __global__ void backward_soft_rasterize_cuda_kernel(
             if (func_id_rgb == 2) {
                 scalar_t agg_z = soft_colors[(bn * 4) * (is * is) + pn];
                 scalar_t sqrt_dis = sqrt(dis);
-                if (zp < agg_z && (sqrt_dis >= 0.001 || agg_z - zp >= 0.001)) {
+                if (zp < agg_z && (zp > near && zp < far) && (sqrt_dis >= 0.001 || agg_z - zp >= 0.001)) {
                     scalar_t occ = sqrt_dis * agg_z / (light_width * (agg_z - zp));
                     scalar_t constant = (exp(-softmin_scale*occ) - softmin_scale*occ)/softmin_sum;
                     for (int k = 0; k < 3; k++) {
