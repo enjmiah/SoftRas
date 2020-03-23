@@ -24,7 +24,9 @@ std::vector<at::Tensor> forward_soft_rasterize_cuda(
         int func_id_rgb,
         int func_id_alpha,
         int texture_sample_type,
-        bool double_side);
+        bool double_side,
+        float light_width,
+        float softmin_scale);
 
 
 std::vector<at::Tensor> backward_soft_rasterize_cuda(
@@ -47,7 +49,9 @@ std::vector<at::Tensor> backward_soft_rasterize_cuda(
         int func_id_rgb,
         int func_id_alpha,
         int texture_sample_type,
-        bool double_side);
+        bool double_side,
+        float light_width,
+        float softmin_scale);
 
 // C++ interface
 
@@ -73,7 +77,9 @@ std::vector<at::Tensor> forward_soft_rasterize(
         int func_id_rgb,
         int func_id_alpha,
         int texture_sample_type,
-        bool double_side) {
+        bool double_side,
+        float light_width,
+        float softmin_scale) {
 
     CHECK_INPUT(faces);
     CHECK_INPUT(textures);
@@ -87,7 +93,8 @@ std::vector<at::Tensor> forward_soft_rasterize(
                                        image_size, near, far, eps, 
                                        sigma_val, func_id_dist, dist_eps,
                                        gamma_val, func_id_rgb, func_id_alpha, 
-                                       texture_sample_type, double_side);
+                                       texture_sample_type, double_side,
+                                       light_width, softmin_scale);
 }
 
 
@@ -111,7 +118,9 @@ std::vector<at::Tensor> backward_soft_rasterize(
         int func_id_rgb,
         int func_id_alpha,
         int texture_sample_type,
-        bool double_side) {
+        bool double_side,
+        float light_width,
+        float softmin_scale) {
 
     CHECK_INPUT(faces);
     CHECK_INPUT(textures);
@@ -128,7 +137,8 @@ std::vector<at::Tensor> backward_soft_rasterize(
                                         image_size, near, far, eps, 
                                         sigma_val, func_id_dist, dist_eps,
                                         gamma_val, func_id_rgb, func_id_alpha, 
-                                        texture_sample_type, double_side);
+                                        texture_sample_type, double_side,
+                                        light_width, softmin_scale);
 }
 
 

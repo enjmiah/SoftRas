@@ -303,7 +303,9 @@ __global__ void forward_soft_rasterize_cuda_kernel(
         int func_id_rgb,
         int func_id_alpha,
         int texture_sample_type,
-        bool double_side) {
+        bool double_side,
+        float light_width,
+        float softmin_scale) {
 
     ////////////////////////
     ////////////////////////
@@ -404,7 +406,7 @@ __global__ void forward_soft_rasterize_cuda_kernel(
 
         ////////////////////////////////////////////////////
 
-        scalar_t softmin_scale = 10.;
+        /*scalar_t softmin_scale = 10.;
         scalar_t aggregate_occ = exp(-softmin_scale);
         scalar_t softmin_sum = exp(-softmin_scale);
 
@@ -461,7 +463,7 @@ __global__ void forward_soft_rasterize_cuda_kernel(
                 softmin_sum += exp(softmin_scale*-occ);
             }
         }
-        aggregate_occ /= softmin_sum;
+        aggregate_occ /= softmin_sum;*/
 
 
 
@@ -489,12 +491,7 @@ __global__ void forward_soft_rasterize_cuda_kernel(
                 for (int k = 0; k < 3; k++) {
                     scalar_t color_k;
                     if (func_id_rgb == 2) {
-                        color_k = aggregate_occ;
-                        //if (k == 2) {
-                            //color_k = aggregate_occ;
-                        //} else {
-                            //color_k = zp;
-                        //}
+                        color_k = zp;
                     } else {
                         color_k = forward_sample_texture(texture, w_clip, texture_res,
                             k, texture_sample_type);
@@ -523,15 +520,68 @@ __global__ void forward_soft_rasterize_cuda_kernel(
             for (int k = 0; k < 3; k++) {
                 soft_colors[(bn * 4 + k) * (is * is) + pn] = soft_color[k];
             }
-        aggrs_info[(bn * 2 + 0) * (is * is) + pn] = depth_min;
-        aggrs_info[(bn * 2 + 1) * (is * is) + pn] = face_index_min;
+        aggrs_info[(bn * 3 + 0) * (is * is) + pn] = depth_min;
+        aggrs_info[(bn * 3 + 1) * (is * is) + pn] = face_index_min;
     } else
     if (func_id_rgb == 1 || func_id_rgb == 2) {
         for (int k = 0; k < 3; k++) {
             soft_colors[(bn * 4 + k) * (is * is) + pn] = soft_color[k] / softmax_sum;
         }
-        aggrs_info[(bn * 2 + 0) * (is * is) + pn] = softmax_sum;
-        aggrs_info[(bn * 2 + 1) * (is * is) + pn] = softmax_max;
+        aggrs_info[(bn * 3 + 0) * (is * is) + pn] = softmax_sum;
+        aggrs_info[(bn * 3 + 1) * (is * is) + pn] = softmax_max;
+    }
+
+    if (func_id_rgb == 2) {
+        const scalar_t softmin_scale = 10.;
+        scalar_t aggregate_occ = exp(-softmin_scale);
+        scalar_t softmin_sum = exp(-softmin_scale);
+        scalar_t agg_z = soft_colors[(bn * 4) * (is * is) + pn];
+
+        const scalar_t *face2 = &faces[bn * nf * 9] - 9;
+        const scalar_t *face2_info = &faces_info[bn * nf * 27] - 27;
+        for (int fn2 = 0; fn2 < nf; fn2++) {
+            face2 += 9;
+            face2_info += 27;
+
+            scalar_t dis2;
+            scalar_t dis_x2;
+            scalar_t dis_y2;
+            scalar_t t2[3];
+            scalar_t w2[3];
+            scalar_t w2_clip[3];
+            scalar_t sign2;
+
+            barycentric_coordinate(w2, xp, yp, face2_info);
+
+            euclidean_p2f_distance(sign2, dis_x2, dis_y2, w2, t2, face2, face2_info, xp, yp);
+            dis2 = dis_x2 * dis_x2 + dis_y2 * dis_y2;
+
+            for (int k = 0; k < 3; k++) w2_clip[k] = w2[k];
+            barycentric_clip(w2_clip);
+            const scalar_t zp2 = 1. / (w2_clip[0] / face2[2] + w2_clip[1] / face2[5] + w2_clip[2] / face2[8]);
+            if (zp2 < near || zp2 > far) continue; // triangle out of screen, pass
+
+            // Ignore z farther than current z
+            if (zp2 > agg_z) continue;
+
+            scalar_t sqrt_dis2 = sqrt(dis2);
+            scalar_t occ = sqrt_dis2 * agg_z / (light_width * (agg_z - zp2));
+            if (sqrt_dis2 < 0.001 && agg_z - zp2 < 0.001) {
+              continue;
+            }
+            if (occ < 0.0) {
+              occ = 0.0;
+            }
+            if (occ > 1.0) {
+              occ = 1.0;
+            }
+            aggregate_occ += occ * exp(softmin_scale*-occ);
+            softmin_sum += exp(softmin_scale*-occ);
+        }
+
+        aggregate_occ /= softmin_sum;
+        aggrs_info[(bn * 3 + 2) * (is * is) + pn] = softmin_sum;
+        soft_colors[(bn * 4 + 1) * (is * is) + pn] = aggregate_occ;
     }
 }
 
@@ -542,7 +592,7 @@ __global__ void backward_soft_rasterize_cuda_kernel(
         const scalar_t* __restrict__ textures,
         const scalar_t* __restrict__ soft_colors,
         const scalar_t* __restrict__ faces_info,
-        const scalar_t* __restrict__ aggrs_info, // 0: sum, 1: max z*D
+        const scalar_t* __restrict__ aggrs_info, // 0: sum, 1: max z*D, 2: softmin_sum (for partial occ)
         scalar_t* grad_faces,
         scalar_t* grad_textures,
         scalar_t* grad_soft_colors,
@@ -561,7 +611,9 @@ __global__ void backward_soft_rasterize_cuda_kernel(
         int func_id_rgb,
         int func_id_alpha,
         int texture_sample_type,
-        bool double_side) {
+        bool double_side,
+        float light_width,
+        float softmin_scale) {
 
     ////////////////////////
     ////////////////////////
@@ -585,8 +637,9 @@ __global__ void backward_soft_rasterize_cuda_kernel(
 
     const scalar_t threshold = dist_eps * sigma_val;
 
-    const scalar_t softmax_sum = aggrs_info[(bn * 2 + 0) * (is * is) + pn];
-    const scalar_t softmax_max = aggrs_info[(bn * 2 + 1) * (is * is) + pn];
+    const scalar_t softmax_sum = aggrs_info[(bn * 3 + 0) * (is * is) + pn];
+    const scalar_t softmax_max = aggrs_info[(bn * 3 + 1) * (is * is) + pn];
+    const scalar_t softmin_sum = aggrs_info[(bn * 3 + 1) * (is * is) + pn];
 
     for (int fn = 0; fn < nf; fn++) {
         face += 9;
@@ -627,7 +680,12 @@ __global__ void backward_soft_rasterize_cuda_kernel(
 
         scalar_t* grad_face = &grad_faces[(bn * nf + fn) * 9];
         scalar_t* grad_texture = &grad_textures[(bn * nf + fn) * texture_size * 3];
-        scalar_t grad_v[3][3] = {0};
+        scalar_t grad_v[3][3];
+        for (int k = 0; k < 3; k++) {
+            for (int l = 0; l < 3; l++) {
+                grad_v[k][l] = 0;
+            }
+        }
         scalar_t C_grad_xy = 0;
 
         /////////////////////////////////////////////////////
@@ -676,13 +734,20 @@ __global__ void backward_soft_rasterize_cuda_kernel(
                     atomicAdd(&grad_texture[3 * j + k], zp_softmax * grad_t);
                 }
 
-                const scalar_t color_k =
-                    (func_id_rgb == 2
-                     ? zp
-                     : forward_sample_texture(texture, w, texture_res, k,
-                                              texture_sample_type));
+                scalar_t color_k;
+                if (func_id_rgb == 2) {
+                    if (k == 1) {
+                      continue;
+                    } else {
+                      color_k = zp;
+                    }
+                } else {
+                    color_k = forward_sample_texture(texture, w, texture_res, k,
+                                              texture_sample_type);
+                }
                 C_grad_xyz_rgb += grad_soft_color_k * (color_k - soft_colors[(bn * 4 + k) * (is * is) + pn]);
             }
+
             C_grad_xyz_rgb *= zp_softmax;
             C_grad_xy += C_grad_xyz_rgb / soft_fragment;
 
@@ -690,6 +755,34 @@ __global__ void backward_soft_rasterize_cuda_kernel(
             grad_v[0][2] = C_grad_z_rgb * w[0] / face[2] / face[2];
             grad_v[1][2] = C_grad_z_rgb * w[1] / face[5] / face[5];
             grad_v[2][2] = C_grad_z_rgb * w[2] / face[8] / face[8];
+
+            if (func_id_rgb == 2) {
+                scalar_t agg_z = soft_colors[(bn * 4) * (is * is) + pn];
+                scalar_t sqrt_dis = sqrt(dis);
+                if (zp < agg_z && (sqrt_dis >= 0.001 || agg_z - zp >= 0.001)) {
+                    scalar_t occ = sqrt_dis * agg_z / (light_width * (agg_z - zp));
+                    scalar_t constant = (exp(-softmin_scale*occ) - softmin_scale*occ)/softmin_sum;
+                    for (int k = 0; k < 3; k++) {
+                        for (int l = 0; l < 3; l++) {
+                            scalar_t grad_agg_z = soft_fragment * (1 - soft_fragment) / sigma_val;
+                            scalar_t grad_dis = 0.;
+                            scalar_t grad_z = 1.;
+                            if (l < 2) {
+                                grad_dis = 2 * sign * (t[k] + w0[k]) * (l == 0 ? dis_x : dis_y);
+                                grad_z = 0.;
+                            } else {
+                              grad_agg_z *= w[k] / face[2 + 3*k] / face[2 + 3*k];
+                            }
+
+                            scalar_t g = dis * agg_z;
+                            scalar_t grad_g = dis * grad_agg_z + grad_dis * agg_z;
+                            scalar_t h = agg_z - zp;
+                            scalar_t grad_h = grad_agg_z - grad_z;
+                            grad_v[k][l] += constant / light_width * (grad_g*h - g*grad_h) / (h * h);
+                        }
+                    }
+                }
+            }
         }
 
         /////////////////////////////////////////////////////
@@ -702,7 +795,7 @@ __global__ void backward_soft_rasterize_cuda_kernel(
         if (func_id_dist == 2) { // euclidean distance
             for (int k = 0; k < 3; k++) {
                 for (int l = 0; l < 2; l++) {
-                    grad_v[k][l] = 2 * sign * C_grad_xy * (t[k] + w0[k]) * (l == 0 ? dis_x : dis_y);
+                    grad_v[k][l] += 2 * sign * C_grad_xy * (t[k] + w0[k]) * (l == 0 ? dis_x : dis_y);
                 }
             }
         }
@@ -741,7 +834,9 @@ std::vector<at::Tensor> forward_soft_rasterize_cuda(
         int func_id_rgb,
         int func_id_alpha,
         int texture_sample_type,
-        bool double_side) {
+        bool double_side,
+        float light_width,
+        float softmin_scale) {
 
     const auto batch_size = faces.size(0);
     const auto num_faces = faces.size(1);
@@ -787,7 +882,9 @@ std::vector<at::Tensor> forward_soft_rasterize_cuda(
           func_id_rgb,
           func_id_alpha,
           texture_sample_type,
-          double_side);
+          double_side,
+          light_width,
+          softmin_scale);
       }));
 
     err = cudaGetLastError();
@@ -818,7 +915,9 @@ std::vector<at::Tensor> backward_soft_rasterize_cuda(
         int func_id_rgb,
         int func_id_alpha,
         int texture_sample_type,
-        bool double_side) {
+        bool double_side,
+        float light_width,
+        float softmin_scale) {
 
     const auto batch_size = faces.size(0);
     const auto num_faces = faces.size(1);
@@ -852,7 +951,9 @@ std::vector<at::Tensor> backward_soft_rasterize_cuda(
           func_id_rgb,
           func_id_alpha,
           texture_sample_type,
-          double_side);
+          double_side,
+          light_width,
+          softmin_scale);
       }));
 
     cudaError_t err = cudaGetLastError();
