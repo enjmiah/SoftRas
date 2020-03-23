@@ -400,6 +400,71 @@ __global__ void forward_soft_rasterize_cuda_kernel(
         const scalar_t zp = 1. / (w_clip[0] / face[2] + w_clip[1] / face[5] + w_clip[2] / face[8]);
         if (zp < near || zp > far) continue; // triangle out of screen, pass
 
+
+
+        ////////////////////////////////////////////////////
+
+        scalar_t softmin_scale = 10.;
+        scalar_t aggregate_occ = exp(-softmin_scale);
+        scalar_t softmin_sum = exp(-softmin_scale);
+
+        //aggregate_occ = 1.;
+
+        if (func_id_rgb == 2) {
+
+            const scalar_t *face2 = &faces[bn * nf * 9] - 9;
+            const scalar_t *face2_info = &faces_info[bn * nf * 27] - 27;
+            for (int fn2 = 0; fn2 < nf; fn2++) {
+                face2 += 9;
+                face2_info += 27;
+
+                if (fn2 == fn) continue;
+
+                scalar_t dis2;
+                scalar_t dis_x2;
+                scalar_t dis_y2;
+                scalar_t t2[3];
+                scalar_t w2[3];
+                scalar_t w2_clip[3];
+                scalar_t sign2;
+                scalar_t soft_fragment2;
+
+                barycentric_coordinate(w2, xp, yp, face2_info);
+
+                euclidean_p2f_distance(sign2, dis_x2, dis_y2, w2, t2, face2, face2_info, xp, yp);
+                dis2 = dis_x2 * dis_x2 + dis_y2 * dis_y2;
+                soft_fragment2 = 1. / (1. + exp(-sign2 * dis2 / sigma_val));
+
+                for (int k = 0; k < 3; k++) w2_clip[k] = w2[k];
+                barycentric_clip(w2_clip);
+                const scalar_t zp2 = 1. / (w2_clip[0] / face2[2] + w2_clip[1] / face2[5] + w2_clip[2] / face2[8]);
+                if (zp2 < near || zp2 > far) continue; // triangle out of screen, pass
+
+                // Ignore z farther than current z
+                //if (zp2 > zp - 0.001) continue;
+                if (zp2 > zp) continue;
+
+                const scalar_t width = 2.;
+                scalar_t sqrt_dis2 = sqrt(dis2);
+                scalar_t occ = sqrt_dis2 * zp / (width * (zp - zp2));
+                if (sqrt_dis2 < 0.001 && zp - zp2 < 0.001) {
+                  continue;
+                  //occ = zp / width;
+                }
+                if (occ < 0.0) {
+                  occ = 0.0;
+                }
+                if (occ > 1.0) {
+                  occ = 1.0;
+                }
+                aggregate_occ += occ * exp(softmin_scale*-occ);
+                softmin_sum += exp(softmin_scale*-occ);
+            }
+        }
+        aggregate_occ /= softmin_sum;
+
+
+
         /////////////////////////////////////////////////////
         // aggregate for rgb channels
         if (func_id_rgb == 0) { // Hard assign
@@ -422,11 +487,18 @@ __global__ void forward_soft_rasterize_cuda_kernel(
                 const scalar_t exp_z = exp((zp_norm - softmax_max) / gamma_val);
                 softmax_sum = exp_delta_zp * softmax_sum + exp_z * soft_fragment;
                 for (int k = 0; k < 3; k++) {
-                    const scalar_t color_k =
-                        (func_id_rgb == 2
-                         ? zp
-                         : forward_sample_texture(texture, w_clip, texture_res,
-                                                  k, texture_sample_type));
+                    scalar_t color_k;
+                    if (func_id_rgb == 2) {
+                        color_k = aggregate_occ;
+                        //if (k == 2) {
+                            //color_k = aggregate_occ;
+                        //} else {
+                            //color_k = zp;
+                        //}
+                    } else {
+                        color_k = forward_sample_texture(texture, w_clip, texture_res,
+                            k, texture_sample_type);
+                    }
                     soft_color[k] = exp_delta_zp * soft_color[k] + exp_z * soft_fragment * color_k;// * soft_fragment;
                 }
             }
