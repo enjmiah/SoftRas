@@ -26,7 +26,7 @@ def main():
     args = parser.parse_args()
 
     # other settings
-    camera_distance = 5
+    camera_distance = 30
     elevation = 30
     azimuth = 0
 
@@ -35,29 +35,21 @@ def main():
                             # load_texture=True, texture_res=5, texture_type='surface')
 
     # create renderer with SoftRas
-    render_params = dict(
-        light_intensity_ambient=0.2,
-        light_intensity_directionals=0.8,
-        light_directions=[1/np.sqrt(2), 1/np.sqrt(2), 0],
-    )
-    renderer = sr.SoftRenderer(camera_mode='look_at', **render_params)
-    depth_renderer = sr.SoftRenderer(aggr_func_rgb='depth',
-                                     camera_mode='look_at',
-                                     eye=[8.0, 8.0, 0.0],
-                                     camera_direction=render_params['light_directions'],
-                                     **render_params)
+    light_direction = [1/np.sqrt(3), 1/np.sqrt(3), 1/np.sqrt(3)]
+    renderer = sr.SoftRenderer(background_color=[0.2, 0.3, 0.45],
+                               camera_mode='look_at',
+                               perspective=False,
+                               viewing_scale=0.18,
+                               near=0.1, far=500,
+                               light_intensity_ambient=0.2,
+                               light_intensity_directionals=0.8,
+                               light_directions=light_direction)
 
     os.makedirs(args.output_dir, exist_ok=True)
 
     # draw object from different view
     loop = tqdm.tqdm(list(range(0, 360, 4)))
     writer = imageio.get_writer(os.path.join(args.output_dir, 'rotation.gif'), mode='I')
-
-    with imageio.get_writer(os.path.join(args.output_dir, 'depth.png')) as depth_writer:
-        mesh.reset_()
-        depth_images = depth_renderer.render_mesh(mesh)
-        depth_image = depth_images.detach().cpu().numpy()[0].transpose((1, 2, 0))
-        depth_writer.append_data((255*depth_image).astype(np.uint8))
 
     for num, azimuth in enumerate(loop):
         # rest mesh to initial state

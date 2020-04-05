@@ -39,15 +39,16 @@ class SoftRasterizer(nn.Module):
         self.aggr_func_alpha = aggr_func_alpha
         self.texture_type = texture_type
 
-    def forward(self, mesh, mode=None):
+    def forward(self, mesh, shadow_map=None, shadow_vertices=None):
         image_size = self.image_size * (2 if self.anti_aliasing else 1)
 
-        images = srf.soft_rasterize(mesh.face_vertices, mesh.face_textures, image_size, 
-                                    self.background_color, self.near, self.far, 
+        images = srf.soft_rasterize(mesh.face_vertices, mesh.face_textures, image_size,
+                                    self.background_color, self.near, self.far,
                                     self.fill_back, self.eps,
                                     self.sigma_val, self.dist_func, self.dist_eps,
                                     self.gamma_val, self.aggr_func_rgb, self.aggr_func_alpha,
-                                    self.texture_type)
+                                    self.texture_type,
+                                    shadow_map, shadow_vertices)
 
         if self.anti_aliasing:
             images = F.avg_pool2d(images, kernel_size=2, stride=2)

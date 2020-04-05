@@ -21,6 +21,7 @@ static __inline__ __device__ double atomicAdd(double* address, double val) {
 
 namespace{
 
+// FIXME: Computing barycentric coordinates in camera space is incorrect
 template <typename scalar_t>
 __device__ __forceinline__ void barycentric_coordinate(scalar_t *w, const scalar_t x, const scalar_t y, const scalar_t *face_info) {
     w[0] = face_info[3 * 0 + 0] * x + face_info[3 * 0 + 1] * y + face_info[3 * 0 + 2];
@@ -174,9 +175,51 @@ __device__ __forceinline__ void backward_barycentric_p2f_distance(scalar_t grad_
     }
 }
 
+/**
+ * Differentiably sample a square texture with a Gaussian distribution centred
+ * around (mu_u * texture_width, mu_v * texture_width).
+ */
+template <typename scalar_t>
+__device__ __forceinline__ scalar_t forward_sample_texture(
+    const scalar_t *texture, const int texture_width,
+    scalar_t mu_u, scalar_t mu_v, const scalar_t sigma) {
+    mu_u *= texture_width;
+    mu_v *= texture_width;
+    scalar_t sample = 0.0;
+    scalar_t total_wt = 0.0;
+    for (int i = 0; i < texture_width; i += 2) { // go by twos to speed up a little
+        for (int j = 0; j < texture_width; j += 2) {
+            const auto d1 = (scalar_t)i - mu_u;
+            const auto d2 = (scalar_t)j - mu_v;
+            const auto d = d1 * d1 + d2 * d2;
+            const auto wt = exp(-d / (2 * sigma));
+            total_wt += wt;
+            sample += wt * texture[j * texture_width + i];
+        }
+    }
+    return sample / total_wt;
+}
 
 template <typename scalar_t>
-__device__ __forceinline__ scalar_t forward_sample_texture(const scalar_t *texture, const scalar_t *w, const int R, const int k, const int texture_sample_type) {
+__device__ __forceinline__ scalar_t sigmoid(const scalar_t x) {
+    // This branch helps with numerical stability
+    if (x >= 0.0) {
+        return 1.0 / (1.0 + exp(-x));
+    }
+    const auto z = exp(x);
+    return z / (1 + z);
+}
+
+// shadow_u and shadow_v represent where in shadow_map to sample from, where 0.0
+//     and 1.0 are the extremes of the map (although they can exceed these
+//     limits if they fall outside of the light camera's view)
+template <typename scalar_t>
+__device__ __forceinline__ scalar_t forward_fragment_shade(
+    const scalar_t *texture, const scalar_t *w, const int R, const int k,
+    const int texture_sample_type,
+    const scalar_t *shadow_map, const int shadow_map_size,
+    const scalar_t shadow_u, const scalar_t shadow_v, const scalar_t light_depth) {
+
     scalar_t texture_k;
     if (texture_sample_type == 0) { // sample surface color with resolution as R
         const int w_x = w[0] * R;
@@ -190,12 +233,30 @@ __device__ __forceinline__ scalar_t forward_sample_texture(const scalar_t *textu
     if (texture_sample_type == 1) { // sample vertex color
         texture_k = w[0] * texture[k] + w[1] * texture[3+k] + w[2] * texture[6+k];
     }
-    return texture_k;
+    scalar_t shadow_term = 1.0;
+    if (shadow_map) {
+        const int s_x = shadow_map_size * shadow_u;
+        const int s_y = shadow_map_size * (1.0 - shadow_v);
+        if (s_x < 0 || s_y < 0 || s_x >= shadow_map_size || s_y >= shadow_map_size) {
+            shadow_term = 1.0;
+        } else {
+            // controls hardness of the binary shadow-no-shadow test
+            const auto sharpness = 1.0;
+            // controls the effect of surfaces casting shadows on themselves
+            const auto bias = 3.0;
+            // spread of values to sample from the shadow map
+            const auto sigma = 2.0;
+            const auto light_closest = forward_sample_texture<scalar_t>(
+                shadow_map, shadow_map_size, shadow_u, 1.0 - shadow_v, sigma);
+            shadow_term = sigmoid(sharpness * (light_closest - light_depth + bias));
+        }
+    }
+    return texture_k * shadow_term;
 }
 
 
 template <typename scalar_t>
-__device__ __forceinline__ scalar_t backward_sample_texture(const scalar_t grad_color, const scalar_t *w, const int R, const int k, const int texture_sample_type) {
+__device__ __forceinline__ scalar_t backward_fragment_shade(const scalar_t grad_color, const scalar_t *w, const int R, const int k, const int texture_sample_type) {
     scalar_t grad_texture_k;
     if (texture_sample_type == 0) { // sample surface color with resolution as R
         const int w_x = w[0] * R;
@@ -285,6 +346,8 @@ template <typename scalar_t>
 __global__ void forward_soft_rasterize_cuda_kernel(
         const scalar_t* __restrict__ faces,
         const scalar_t* __restrict__ textures,
+        const scalar_t* __restrict__ shadow_map,
+        const scalar_t* __restrict__ shadow_vertices,
         const scalar_t* __restrict__ faces_info,
         scalar_t* aggrs_info,
         scalar_t* soft_colors,
@@ -324,6 +387,7 @@ __global__ void forward_soft_rasterize_cuda_kernel(
     const scalar_t *face = &faces[bn * nf * 9] - 9;
     const scalar_t *texture = &textures[bn * nf * texture_size * 3] - texture_size * 3;
     const scalar_t *face_info = &faces_info[bn * nf * 27] - 27;
+    const scalar_t *shadow_vertex = &shadow_vertices[bn * nf * 9] - 9;
 
     const scalar_t threshold = dist_eps * sigma_val;
 
@@ -338,7 +402,7 @@ __global__ void forward_soft_rasterize_cuda_kernel(
         } else if (func_id_rgb == 1) {
             soft_color[k] = soft_colors[(bn * 4 + k) * (is * is) + pn] * softmax_sum; // initialize background color
         } else if (func_id_rgb == 2) {
-            soft_color[k] = softmax_sum;
+            soft_color[k] = 1e10; // very far away
         }
     }
     scalar_t depth_min = 10000000;
@@ -348,6 +412,7 @@ __global__ void forward_soft_rasterize_cuda_kernel(
         face += 9;
         texture += texture_size * 3;
         face_info += 27;
+        shadow_vertex += 9;
 
         if (check_border(xp, yp, face, sqrt(threshold))) continue; // triangle too far away from pixel
 
@@ -362,6 +427,19 @@ __global__ void forward_soft_rasterize_cuda_kernel(
 
         // compute barycentric coordinate w
         barycentric_coordinate(w, xp, yp, face_info);
+
+        scalar_t shadow_u = 0.0, shadow_v = 0.0, light_depth = 0.0;
+        if (shadow_vertices) {
+            shadow_u = (w[0] * shadow_vertex[0]
+                        + w[1] * shadow_vertex[3]
+                        + w[2] * shadow_vertex[6]);
+            shadow_v = (w[0] * shadow_vertex[1]
+                        + w[1] * shadow_vertex[4]
+                        + w[2] * shadow_vertex[7]);
+            light_depth = (w[0] * shadow_vertex[2]
+                           + w[1] * shadow_vertex[5]
+                           + w[2] * shadow_vertex[8]);
+        }
 
         // compute probability map based on distance functions
         if (func_id_dist == 0) { // hard assign
@@ -407,7 +485,8 @@ __global__ void forward_soft_rasterize_cuda_kernel(
                 depth_min = zp;
                 face_index_min = fn;
                 for (int k = 0; k < 3; k++) {
-                    soft_color[k] = forward_sample_texture(texture, w_clip, texture_res, k, texture_sample_type);
+                    soft_color[k] = forward_fragment_shade(texture, w_clip, texture_res, k, texture_sample_type,
+                                                           shadow_map, image_size, shadow_u, shadow_v, light_depth);
                 }
             }
         } else
@@ -425,8 +504,10 @@ __global__ void forward_soft_rasterize_cuda_kernel(
                     const scalar_t color_k =
                         (func_id_rgb == 2
                          ? zp
-                         : forward_sample_texture(texture, w_clip, texture_res,
-                                                  k, texture_sample_type));
+                         : forward_fragment_shade(texture, w_clip, texture_res,
+                                                  k, texture_sample_type,
+                                                  shadow_map, image_size,
+                                                  shadow_u, shadow_v, light_depth));
                     soft_color[k] = exp_delta_zp * soft_color[k] + exp_z * soft_fragment * color_k;// * soft_fragment;
                 }
             }
@@ -600,15 +681,18 @@ __global__ void backward_soft_rasterize_cuda_kernel(
                 const scalar_t grad_soft_color_k = grad_soft_colors[(bn * 4 + k) * (is * is) + pn];
 
                 for (int j = 0; j < texture_size; j++) {
-                    const scalar_t grad_t = backward_sample_texture(grad_soft_color_k, w, texture_res, j, texture_sample_type);
+                    const scalar_t grad_t = backward_fragment_shade(grad_soft_color_k, w, texture_res, j, texture_sample_type);
                     atomicAdd(&grad_texture[3 * j + k], zp_softmax * grad_t);
                 }
 
                 const scalar_t color_k =
                     (func_id_rgb == 2
                      ? zp
-                     : forward_sample_texture(texture, w, texture_res, k,
-                                              texture_sample_type));
+                     : forward_fragment_shade(texture, w, texture_res, k,
+                                              texture_sample_type,
+                                              (scalar_t*)nullptr, image_size,
+                                              scalar_t(0.0), scalar_t(0.0),
+                                              scalar_t(0.0))); // TODO:
                 C_grad_xyz_rgb += grad_soft_color_k * (color_k - soft_colors[(bn * 4 + k) * (is * is) + pn]);
             }
             C_grad_xyz_rgb *= zp_softmax;
@@ -655,6 +739,8 @@ __global__ void backward_soft_rasterize_cuda_kernel(
 std::vector<at::Tensor> forward_soft_rasterize_cuda(
         at::Tensor faces,
         at::Tensor textures,
+        at::Tensor shadow_map,
+        at::Tensor shadow_vertices,
         at::Tensor faces_info,
         at::Tensor aggrs_info,
         at::Tensor soft_colors,
@@ -697,6 +783,8 @@ std::vector<at::Tensor> forward_soft_rasterize_cuda(
       forward_soft_rasterize_cuda_kernel<scalar_t><<<blocks_2, threads>>>(
           faces.data<scalar_t>(),
           textures.data<scalar_t>(),
+          ((shadow_map.sizes() == std::vector<int64_t>{0}) ? nullptr : shadow_map.data<scalar_t>()),
+          ((shadow_vertices.sizes() == std::vector<int64_t>{0}) ? nullptr : shadow_vertices.data<scalar_t>()),
           faces_info.data<scalar_t>(),
           aggrs_info.data<scalar_t>(),
           soft_colors.data<scalar_t>(),

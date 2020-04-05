@@ -1,5 +1,6 @@
-
 import math
+from copy import copy
+
 import numpy as np
 import torch
 import torch.nn as nn
@@ -81,15 +82,16 @@ class Transform(nn.Module):
         if self.camera_mode == 'projection':
             self.transformer = Projection(P, dist_coeffs, orig_size)
         elif self.camera_mode == 'look':
-            self.transformer = Look(perspective, viewing_angle, viewing_scale, eye, camera_direction)
+            self.transformer = Look(camera_direction, perspective, viewing_angle, viewing_scale, eye)
         elif self.camera_mode == 'look_at':
             self.transformer = LookAt(perspective, viewing_angle, viewing_scale, eye)
         else:
             raise ValueError('Camera mode has to be one of projection, look or look_at')
 
     def forward(self, mesh):
-        mesh.vertices = self.transformer(mesh.vertices)
-        return mesh
+        mesh2 = copy(mesh)
+        mesh2.vertices = self.transformer(mesh2.vertices)
+        return mesh2
 
     def set_eyes_from_angles(self, distances, elevations, azimuths):
         if self.camera_mode not in ['look', 'look_at']:
