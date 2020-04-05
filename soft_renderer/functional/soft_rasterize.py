@@ -14,7 +14,8 @@ class SoftRasterizeFunction(Function):
                 fill_back=True, eps=1e-3,
                 sigma_val=1e-5, dist_func='euclidean', dist_eps=1e-4,
                 gamma_val=1e-4, aggr_func_rgb='softmax', aggr_func_alpha='prod',
-                texture_type='surface', shadow_map=None, shadow_vertices=None):
+                texture_type='surface', shadow_map=None, shadow_vertices=None,
+                light_width=1, softmin_scale=10):
 
         # face_vertices: [nb, nf, 9]
         # textures: [nb, nf, 9]
@@ -37,6 +38,8 @@ class SoftRasterizeFunction(Function):
         ctx.func_alpha_type = func_alpha_map[aggr_func_alpha]
         ctx.texture_type = func_map_sample[texture_type]
         ctx.fill_back = fill_back
+        ctx.light_width = light_width
+        ctx.softmin_scale = softmin_scale
 
         face_vertices = face_vertices.clone()
         textures = textures.clone()
@@ -45,7 +48,7 @@ class SoftRasterizeFunction(Function):
         ctx.batch_size, ctx.num_faces = face_vertices.shape[:2]
 
         faces_info = torch.FloatTensor(ctx.batch_size, ctx.num_faces, 9*3).fill_(0.0).to(device=ctx.device) # [inv*9, sym*9, obt*3, 0*6]
-        aggrs_info = torch.FloatTensor(ctx.batch_size, 2, ctx.image_size, ctx.image_size).fill_(0.0).to(device=ctx.device)
+        aggrs_info = torch.FloatTensor(ctx.batch_size, 3, ctx.image_size, ctx.image_size).fill_(0.0).to(device=ctx.device) 
 
         soft_colors = torch.FloatTensor(ctx.batch_size, 4, ctx.image_size, ctx.image_size).fill_(1.0).to(device=ctx.device)
         soft_colors[:, 0, :, :] *= background_color[0]
@@ -67,7 +70,8 @@ class SoftRasterizeFunction(Function):
                                                        image_size, near, far, eps,
                                                        sigma_val, ctx.func_dist_type, ctx.dist_eps,
                                                        gamma_val, ctx.func_rgb_type, ctx.func_alpha_type,
-                                                       ctx.texture_type, fill_back)
+                                                       ctx.texture_type, fill_back,
+                                                       light_width, softmin_scale)
 
         ctx.save_for_backward(face_vertices, textures, soft_colors, faces_info, aggrs_info)
         return soft_colors
@@ -89,6 +93,8 @@ class SoftRasterizeFunction(Function):
         func_alpha_type = ctx.func_alpha_type
         texture_type = ctx.texture_type
         fill_back = ctx.fill_back
+        light_width = ctx.light_width
+        softmin_scale = ctx.softmin_scale
 
         grad_faces = torch.zeros_like(face_vertices, dtype=torch.float32).to(ctx.device).contiguous()
         grad_textures = torch.zeros_like(textures, dtype=torch.float32).to(ctx.device).contiguous()
@@ -101,18 +107,20 @@ class SoftRasterizeFunction(Function):
                                                         image_size, near, far, eps,
                                                         sigma_val, func_dist_type, dist_eps,
                                                         gamma_val, func_rgb_type, func_alpha_type,
-                                                        texture_type, fill_back)
+                                                        texture_type, fill_back,
+                                                        light_width, softmin_scale)
 
-        return grad_faces, grad_textures, None, None, None, None, None, None, None, None, None, None, None, None, None
+        return grad_faces, grad_textures, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None
 
 
 def soft_rasterize(face_vertices, textures, image_size=256,
                    background_color=[0, 0, 0], near=1, far=100,
                    fill_back=True, eps=1e-3,
                    sigma_val=1e-5, dist_func='euclidean', dist_eps=1e-4,
-                   gamma_val=1e-4, aggr_func_rgb='softmax',
-                   aggr_func_alpha='prod', texture_type='surface',
-                   shadow_map=None, shadow_vertices=None):
+                   gamma_val=1e-4, aggr_func_rgb='softmax', aggr_func_alpha='prod',
+                   texture_type='surface',
+                   shadow_map=None, shadow_vertices=None,
+                   light_width=1, softmin_scale=10):
     if face_vertices.device == "cpu":
         raise TypeError('Rasterize module supports only cuda Tensors')
 
@@ -120,5 +128,6 @@ def soft_rasterize(face_vertices, textures, image_size=256,
                                        background_color, near, far,
                                        fill_back, eps,
                                        sigma_val, dist_func, dist_eps,
-                                       gamma_val, aggr_func_rgb, aggr_func_alpha,
-                                       texture_type, shadow_map, shadow_vertices)
+                                       gamma_val, aggr_func_rgb, aggr_func_alpha, 
+                                       texture_type, shadow_map, shadow_vertices,
+                                       light_width, softmin_scale)
