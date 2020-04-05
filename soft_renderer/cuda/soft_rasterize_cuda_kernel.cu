@@ -665,7 +665,7 @@ __global__ void backward_soft_rasterize_cuda_kernel(
             if (fn == softmax_max) {
                 for (int k = 0; k < 3; k++) {
                     for (int j = 0; j < texture_size; j++) {
-                        atomicAdd(&grad_texture[3 * j + k], backward_sample_texture(grad_soft_colors[(bn * 4 + k) * (is * is) + pn], w, texture_res, j, texture_sample_type));
+                        atomicAdd(&grad_texture[3 * j + k], backward_fragment_shade(grad_soft_colors[(bn * 4 + k) * (is * is) + pn], w, texture_res, j, texture_sample_type));
                     }
                 }
             }
