@@ -187,8 +187,11 @@ __device__ __forceinline__ scalar_t forward_sample_texture(
     mu_v *= texture_width;
     scalar_t sample = 0.0;
     scalar_t total_wt = 0.0;
-    for (int i = 0; i < texture_width; i += 2) { // go by twos to speed up a little
-        for (int j = 0; j < texture_width; j += 2) {
+    const auto kernel_w = 20;
+    for (int i = max(0, (int)lrintf(mu_u) - kernel_w);
+         i < min(texture_width, (int)lrintf(mu_u) + kernel_w); i++) {
+        for (int j = max(0, (int)lrintf(mu_v) - kernel_w);
+             j < min(texture_width, (int)lrintf(mu_v) + kernel_w); j++) {
             const auto d1 = (scalar_t)i - mu_u;
             const auto d2 = (scalar_t)j - mu_v;
             const auto d = d1 * d1 + d2 * d2;
@@ -218,7 +221,8 @@ __device__ __forceinline__ scalar_t forward_fragment_shade(
     const scalar_t *texture, const scalar_t *w, const int R, const int k,
     const int texture_sample_type,
     const scalar_t *shadow_map, const int shadow_map_size,
-    const scalar_t shadow_u, const scalar_t shadow_v, const scalar_t light_depth) {
+    const scalar_t shadow_u, const scalar_t shadow_v, const scalar_t light_depth,
+    const float sigma, const float gamma) {
 
     scalar_t texture_k;
     if (texture_sample_type == 0) { // sample surface color with resolution as R
@@ -241,14 +245,14 @@ __device__ __forceinline__ scalar_t forward_fragment_shade(
             shadow_term = 1.0;
         } else {
             // controls hardness of the binary shadow-no-shadow test
-            const auto sharpness = 1.0;
+            const auto sharpness = 1.5;
             // controls the effect of surfaces casting shadows on themselves
             const auto bias = 3.0;
             // spread of values to sample from the shadow map
-            const auto sigma = 2.0;
+            const auto sigma_s = 2e4 * sigma;
             const auto light_closest = forward_sample_texture<scalar_t>(
-                shadow_map, shadow_map_size, shadow_u, 1.0 - shadow_v, sigma);
-            shadow_term = sigmoid(sharpness * (light_closest - light_depth + bias));
+                shadow_map, shadow_map_size, shadow_u, 1.0 - shadow_v, sigma_s);
+            shadow_term = sigmoid(sharpness * (light_closest - light_depth) + bias);
         }
     }
     return texture_k * shadow_term;
@@ -486,7 +490,7 @@ __global__ void forward_soft_rasterize_cuda_kernel(
                 face_index_min = fn;
                 for (int k = 0; k < 3; k++) {
                     soft_color[k] = forward_fragment_shade(texture, w_clip, texture_res, k, texture_sample_type,
-                                                           shadow_map, image_size, shadow_u, shadow_v, light_depth);
+                                                           shadow_map, image_size, shadow_u, shadow_v, light_depth, sigma_val, gamma_val);
                 }
             }
         } else
@@ -507,7 +511,7 @@ __global__ void forward_soft_rasterize_cuda_kernel(
                          : forward_fragment_shade(texture, w_clip, texture_res,
                                                   k, texture_sample_type,
                                                   shadow_map, image_size,
-                                                  shadow_u, shadow_v, light_depth));
+                                                  shadow_u, shadow_v, light_depth, sigma_val, gamma_val));
                     soft_color[k] = exp_delta_zp * soft_color[k] + exp_z * soft_fragment * color_k;// * soft_fragment;
                 }
             }
@@ -692,7 +696,7 @@ __global__ void backward_soft_rasterize_cuda_kernel(
                                               texture_sample_type,
                                               (scalar_t*)nullptr, image_size,
                                               scalar_t(0.0), scalar_t(0.0),
-                                              scalar_t(0.0))); // TODO:
+                                              scalar_t(0.0), sigma_val, gamma_val)); // TODO:
                 C_grad_xyz_rgb += grad_soft_color_k * (color_k - soft_colors[(bn * 4 + k) * (is * is) + pn]);
             }
             C_grad_xyz_rgb *= zp_softmax;

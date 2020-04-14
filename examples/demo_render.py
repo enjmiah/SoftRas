@@ -36,7 +36,7 @@ def main():
 
     # create renderer with SoftRas
     light_direction = [1/np.sqrt(3), 1/np.sqrt(3), 1/np.sqrt(3)]
-    renderer = sr.SoftRenderer(background_color=[0.2, 0.3, 0.45],
+    renderer = sr.SoftRenderer(background_color=[1, 1, 1],
                                camera_mode='look_at',
                                perspective=False,
                                viewing_scale=0.18,

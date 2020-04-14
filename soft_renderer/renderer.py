@@ -95,9 +95,11 @@ class SoftRenderer(nn.Module):
 
     def set_sigma(self, sigma):
         self.rasterizer.sigma_val = sigma
+        self.depth_rasterizer.sigma_val = sigma
 
     def set_gamma(self, gamma):
         self.rasterizer.gamma_val = gamma
+        self.depth_rasterizer.gamma_val = gamma
 
     def set_texture_mode(self, mode):
         assert mode in ['vertex', 'surface'], 'Mode only support surface and vertex'
