@@ -1,0 +1,3 @@
+0-1 mix: 21s
+sigmoid: 1:44s
+thresh 4:  1:07
